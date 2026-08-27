@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Resolutor de CAPTCHA WebSocket - SECOP II</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background: #f4f4f9; padding: 20px; margin: 0; }
+        #secop-viewport { cursor: crosshair; border: 2px solid #333; box-shadow: 0 4px 12px rgba(0,0,0,0.3); max-width: 100%; display: inline-block; }
+        #status-log { font-weight: bold; margin-top: 15px; color: #222; }
+    </style>
+</head>
+<body>
+
+    <h2>Resolución Ultra-Rápida de CAPTCHA (WebSocket)</h2>
+    <p id="status-log">Conectando con Docker...</p>
+
+    <div>
+        <img id="secop-viewport" src="" alt="Cargando vista remota..." onclick="sendClick(event)">
+    </div>
+
+    <script>
+        const ws = new WebSocket("ws://localhost:8000/ws");
+        const imgElement = document.getElementById('secop-viewport');
+        const logElement = document.getElementById('status-log');
+
+        ws.onopen = () => {
+            logElement.innerText = "Conectado. Esperando que SECOP II cargue en Docker...";
+        };
+
+        ws.onmessage = (event) => {
+            const response = JSON.parse(event.data);
+            if (response.type === "image") {
+                imgElement.src = response.data;
+                logElement.innerText = "Pantalla actualizada. Haga clic sobre el CAPTCHA o reto.";
+            }
+        };
+
+        ws.onclose = () => {
+            logElement.innerText = "Conexión cerrada.";
+        };
+
+        function sendClick(event) {
+    const rect = imgElement.getBoundingClientRect();
+    
+    // Factor de escala
+    const scaleX = imgElement.naturalWidth / rect.width;
+    const scaleY = imgElement.naturalHeight / rect.height;
+
+    const realX = Math.round((event.clientX - rect.left) * scaleX);
+    const realY = Math.round((event.clientY - rect.top) * scaleY);
+
+    logElement.innerText = `Enviando clic instantáneo a X: ${realX}, Y: ${realY}...`;
+
+    // CORRECCIÓN AQUÍ: Usar JSON con mayúsculas
+    ws.send(JSON.stringify({
+        action: "click",
+        x: realX,
+        y: realY
+    }));
+}
+    </script>
+</body>
+</html>

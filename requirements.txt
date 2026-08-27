@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+selenium
+webdriver-manager
+pillow
+pydantic
