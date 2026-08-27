@@ -2,20 +2,42 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Resolutor de CAPTCHA WebSocket - SECOP II</title>
+    <title>Resolución y Scraping SECOP II</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; background: #f4f4f9; padding: 20px; margin: 0; }
-        #secop-viewport { cursor: crosshair; border: 2px solid #333; box-shadow: 0 4px 12px rgba(0,0,0,0.3); max-width: 100%; display: inline-block; }
-        #status-log { font-weight: bold; margin-top: 15px; color: #222; }
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #f4f6f9;
+            margin: 0;
+            padding: 20px;
+        }
+        h2 { margin-bottom: 5px; }
+        #status-log {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 15px;
+        }
+        .container {
+            display: inline-block;
+            border: 2px solid #ccc;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            background: #fff;
+        }
+        #secop-viewport {
+            cursor: pointer;
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
     </style>
 </head>
 <body>
 
-    <h2>Resolución Ultra-Rápida de CAPTCHA (WebSocket)</h2>
-    <p id="status-log">Conectando con Docker...</p>
+    <h2>Control Remoto SECOP II</h2>
+    <div id="status-log">Conectando al servidor...</div>
 
-    <div>
-        <img id="secop-viewport" src="" alt="Cargando vista remota..." onclick="sendClick(event)">
+    <div class="container">
+        <img id="secop-viewport" onclick="sendClick(event)" alt="Cargando vista previa de SECOP II..." />
     </div>
 
     <script>
@@ -24,15 +46,34 @@
         const logElement = document.getElementById('status-log');
 
         ws.onopen = () => {
-            logElement.innerText = "Conectado. Esperando que SECOP II cargue en Docker...";
+            logElement.innerText = "Conectado. Esperando imagen de SECOP II...";
         };
 
         ws.onmessage = (event) => {
             const response = JSON.parse(event.data);
+
             if (response.type === "image") {
                 imgElement.src = response.data;
-                logElement.innerText = "Pantalla actualizada. Haga clic sobre el CAPTCHA o reto.";
+                logElement.innerText = "Haga clic sobre el reCAPTCHA o la pantalla para interactuar.";
+            } 
+            else if (response.type === "status") {
+                logElement.innerText = response.message;
+            } 
+            else if (response.type === "download") {
+                logElement.innerText = "¡Proceso finalizado! Descargando datos...";
+                
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(response.payload, null, 2));
+                const downloadAnchor = document.createElement('a');
+                downloadAnchor.setAttribute("href", dataStr);
+                downloadAnchor.setAttribute("download", response.filename);
+                document.body.appendChild(downloadAnchor);
+                downloadAnchor.click();
+                downloadAnchor.remove();
             }
+        };
+
+        ws.onerror = () => {
+            logElement.innerText = "Error de conexión. Verifica que el contenedor Docker esté corriendo en el puerto 8000.";
         };
 
         ws.onclose = () => {
@@ -40,24 +81,21 @@
         };
 
         function sendClick(event) {
-    const rect = imgElement.getBoundingClientRect();
-    
-    // Factor de escala
-    const scaleX = imgElement.naturalWidth / rect.width;
-    const scaleY = imgElement.naturalHeight / rect.height;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    const realX = Math.round((event.clientX - rect.left) * scaleX);
-    const realY = Math.round((event.clientY - rect.top) * scaleY);
+            const rect = imgElement.getBoundingClientRect();
+            const scaleX = imgElement.naturalWidth / rect.width;
+            const scaleY = imgElement.naturalHeight / rect.height;
 
-    logElement.innerText = `Enviando clic instantáneo a X: ${realX}, Y: ${realY}...`;
+            const realX = Math.round((event.clientX - rect.left) * scaleX);
+            const realY = Math.round((event.clientY - rect.top) * scaleY);
 
-    // CORRECCIÓN AQUÍ: Usar JSON con mayúsculas
-    ws.send(JSON.stringify({
-        action: "click",
-        x: realX,
-        y: realY
-    }));
-}
+            ws.send(JSON.stringify({
+                action: "click",
+                x: realX,
+                y: realY
+            }));
+        }
     </script>
 </body>
 </html>

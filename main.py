@@ -2,11 +2,13 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
 import base64
 import json
 import asyncio
-import traceback
+import io
+import pandas as pd
+from PIL import Image
 
 app = FastAPI()
 
@@ -32,62 +34,90 @@ async def websocket_endpoint(websocket: WebSocket):
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
     driver = webdriver.Chrome(options=chrome_options)
-    
-    # Coordenadas globales para hacer tracking del puntero
-    current_x = 0
-    current_y = 0
+    is_solved = False
 
-    def capture_screenshot():
-        return base64.b64encode(driver.get_screenshot_as_png()).decode('utf-8')
+    def fast_screenshot_jpg():
+        png_data = driver.get_screenshot_as_png()
+        img = Image.open(io.BytesIO(png_data))
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=55)
+        return base64.b64encode(output.getvalue()).decode('utf-8')
 
-    def execute_click(target_x, target_y):
-        nonlocal current_x, current_y
-        actions = ActionChains(driver)
+    def cdp_click(x, y):
+        driver.execute_cdp_cmd('Input.dispatchMouseEvent', {'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1})
+        driver.execute_cdp_cmd('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1})
+
+    def check_if_captcha_solved():
+        # Comprobar que ya NO estemos en la página de GoogleReCaptcha/Index
+        current_url = driver.current_url
+        if "GoogleReCaptcha" not in current_url:
+            return True
+        return False
+
+    def scrape_secop_data():
+        scraped_data = []
+        rows = driver.find_elements(By.CSS_SELECTOR, "tr.gridRow, tr.gridRowAlt, table tbody tr")
         
-        # Calcular la diferencia desde la última posición conocida
-        offset_x = target_x - current_x
-        offset_y = target_y - current_y
-        
-        # Mover y hacer clic
-        actions.move_by_offset(offset_x, offset_y).click().perform()
-        
-        # Actualizar la posición del cursor
-        current_x = target_x
-        current_y = target_y
+        for row in rows[:20]:
+            text = row.text.strip()
+            if text:
+                scraped_data.append({"Proceso": text})
+                
+        if not scraped_data:
+            elements = driver.find_elements(By.TAG_NAME, "a")
+            for elem in elements[:20]:
+                title = elem.text.strip()
+                if title:
+                    scraped_data.append({"Elemento": title, "Link": elem.get_attribute("href")})
+
+        return scraped_data
+
+    # Tarea background: refresca el canvas a 5 FPS constantemente
+    async def auto_stream_video():
+        nonlocal is_solved
+        while not is_solved:
+            try:
+                jpg_b64 = await asyncio.to_thread(fast_screenshot_jpg)
+                await websocket.send_text(json.dumps({"type": "image", "data": f"data:image/jpeg;base64,{jpg_b64}"}))
+                
+                # Verificar si ya superó el CAPTCHA
+                if await asyncio.to_thread(check_if_captcha_solved):
+                    is_solved = True
+                    break
+
+                await asyncio.sleep(0.2)
+            except Exception:
+                break
 
     try:
-        # 1. Navegar a SECOP II
         await asyncio.to_thread(driver.get, TARGET_URL)
-        await asyncio.sleep(2)
-        
-        # Enviar captura inicial
-        img_b64 = await asyncio.to_thread(capture_screenshot)
-        await websocket.send_text(json.dumps({"type": "image", "data": f"data:image/png;base64,{img_b64}"}))
+        await asyncio.sleep(1.5)
 
-        # 2. Bucle de eventos bidireccional
-        while True:
+        stream_task = asyncio.create_task(auto_stream_video())
+
+        while not is_solved:
             data_str = await websocket.receive_text()
             message = json.loads(data_str)
 
             if message.get("action") == "click":
                 x = int(message["x"])
                 y = int(message["y"])
+                await asyncio.to_thread(cdp_click, x, y)
 
-                try:
-                    await asyncio.to_thread(execute_click, x, y)
-                except Exception as click_err:
-                    print(f"Error al ejecutar clic: {click_err}")
+        stream_task.cancel()
 
-                await asyncio.sleep(1.2) # Pausa para renderizado de reCAPTCHA
+        # Notificar resolución real
+        await websocket.send_text(json.dumps({"type": "status", "message": "¡CAPTCHA Superado! Extrayendo datos de SECOP II..."}))
+        await asyncio.sleep(4)
 
-                # Responder con nueva pantalla
-                updated_img = await asyncio.to_thread(capture_screenshot)
-                await websocket.send_text(json.dumps({"type": "image", "data": f"data:image/png;base64,{updated_img}"}))
+        results = await asyncio.to_thread(scrape_secop_data)
+        await websocket.send_text(json.dumps({
+            "type": "download", 
+            "filename": "secop_data.json", 
+            "payload": results
+        }))
 
     except WebSocketDisconnect:
-        print("Cliente desconectado de forma limpia")
-    except Exception as e:
-        print("Error en WebSocket:")
-        traceback.print_exc()
+        print("Cliente desconectado")
     finally:
         driver.quit()
